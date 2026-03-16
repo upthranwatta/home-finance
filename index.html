@@ -607,6 +607,23 @@ body {
   </div>
 </div>
 
+<!-- Budget Warning Dialog -->
+<div class="confirm-overlay hidden" id="budget-warning-dialog">
+  <div class="confirm-box" style="text-align:left">
+    <div style="text-align:center;font-size:2rem;margin-bottom:8px" id="bw-icon">⚠️</div>
+    <p id="bw-title" style="font-weight:700;font-size:1rem;text-align:center;margin-bottom:10px;color:var(--red)"></p>
+    <div id="bw-details" style="font-size:0.82rem;color:var(--text);margin-bottom:6px"></div>
+    <div id="bw-bar-wrap" style="margin:12px 0">
+      <div class="progress-track"><div class="progress-fill" id="bw-bar" style="width:0%"></div></div>
+    </div>
+    <p id="bw-message" style="font-size:0.8rem;color:var(--text2);text-align:center;margin-bottom:14px"></p>
+    <div class="btns">
+      <button class="btn-no" onclick="budgetWarnResult(false)">Cancel</button>
+      <button class="btn-yes" style="background:var(--orange)" onclick="budgetWarnResult(true)">Add Anyway</button>
+    </div>
+  </div>
+</div>
+
 <!-- Chart.js from CDN -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 
@@ -614,7 +631,7 @@ body {
 // ============================================================
 // CONFIG — Replace this URL after deploying your Apps Script
 // ============================================================
-const API_URL = 'https://script.google.com/macros/s/AKfycbx3_ELhJcqHaTndPWTQRBFc4Y-VWSc74w2DOi2L0quGg5pzx-0f9dg-KrpqlsiQpKJL/exec';
+const API_URL = 'YOUR_APPS_SCRIPT_WEB_APP_URL_HERE';
 
 // ============================================================
 // STATE
@@ -1021,6 +1038,53 @@ async function deleteTransaction(id, type) {
   });
 }
 
+let budgetWarnCallback = null;
+
+function budgetWarnResult(yes) {
+  document.getElementById('budget-warning-dialog').classList.add('hidden');
+  if (yes && budgetWarnCallback) budgetWarnCallback();
+  budgetWarnCallback = null;
+}
+
+function showBudgetWarning(cat, spent, newAmount, callback) {
+  const limit = Number(cat.monthlyLimit) || 0;
+  const afterSpent = spent + newAmount;
+  const pctAfter = limit > 0 ? Math.round((afterSpent / limit) * 100) : 0;
+  const warn = Number(cat.warningPercent) || 80;
+
+  // Determine severity
+  let title, icon, barColor, message;
+  if (afterSpent > limit) {
+    icon = '🚨';
+    title = 'OVER BUDGET!';
+    barColor = 'var(--red)';
+    message = `This will exceed the monthly limit by ${fmtMoney(afterSpent - limit)}. Are you sure?`;
+  } else if (pctAfter >= warn) {
+    icon = '⚠️';
+    title = 'Budget Warning!';
+    barColor = 'var(--yellow)';
+    message = `This will use ${pctAfter}% of the monthly budget. Continue?`;
+  }
+
+  document.getElementById('bw-icon').textContent = icon;
+  document.getElementById('bw-title').textContent = title;
+  document.getElementById('bw-title').style.color = afterSpent > limit ? 'var(--red)' : 'var(--orange)';
+  document.getElementById('bw-details').innerHTML = `
+    <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span>Category:</span><strong>${cat.name}</strong></div>
+    <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span>Monthly Limit:</span><strong>${fmtMoney(limit)}</strong></div>
+    <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span>Already Spent:</span><strong>${fmtMoney(spent)}</strong></div>
+    <div style="display:flex;justify-content:space-between;margin-bottom:4px"><span>Adding Now:</span><strong style="color:var(--red)">+ ${fmtMoney(newAmount)}</strong></div>
+    <div style="display:flex;justify-content:space-between;border-top:1px solid var(--border);padding-top:4px;margin-top:4px"><span>Total After:</span><strong style="color:${afterSpent > limit ? 'var(--red)' : 'var(--orange)'}">${fmtMoney(afterSpent)}</strong></div>
+  `;
+  const bar = document.getElementById('bw-bar');
+  bar.style.width = Math.min(pctAfter, 100) + '%';
+  bar.style.background = barColor;
+  document.getElementById('bw-message').textContent = message;
+
+  document.getElementById('budget-warning-dialog').classList.remove('hidden');
+  budgetWarnCallback = callback;
+}
+
 async function saveTransaction() {
   const editId = document.getElementById('tx-edit-id').value;
   const categoryId = document.getElementById('tx-category').value;
@@ -1032,6 +1096,43 @@ async function saveTransaction() {
   if (!amount || amount <= 0) { toast('Enter a valid amount', 'error'); return; }
   if (!date) { toast('Pick a date', 'error'); return; }
 
+  // Budget check for expenses
+  if (txType === 'out') {
+    const cat = expenseCategories.find(c => c.id === categoryId);
+    if (cat) {
+      const limit = Number(cat.monthlyLimit) || 0;
+      const warn = Number(cat.warningPercent) || 80;
+
+      if (limit > 0) {
+        // Calculate current spending for the same month as the transaction date
+        const txMonthKey = date.substring(0, 7);
+        let spent = allExpenses
+          .filter(e => e.categoryId === categoryId && String(e.date).substring(0, 7) === txMonthKey)
+          .reduce((s, e) => s + Number(e.amount), 0);
+
+        // If editing, subtract the old amount first
+        if (editId) {
+          const oldTx = monthlyExpenses.find(e => e.id === editId);
+          if (oldTx) spent -= Number(oldTx.amount);
+        }
+
+        const afterSpent = spent + amount;
+        const pctAfter = Math.round((afterSpent / limit) * 100);
+
+        // Show warning if reaches warning% or exceeds limit
+        if (pctAfter >= warn) {
+          showBudgetWarning(cat, spent, amount, () => doSaveTransaction(editId, categoryId, amount, date, note));
+          return;
+        }
+      }
+    }
+  }
+
+  // No warning needed, save directly
+  await doSaveTransaction(editId, categoryId, amount, date, note);
+}
+
+async function doSaveTransaction(editId, categoryId, amount, date, note) {
   showLoading();
   try {
     if (editId) {
