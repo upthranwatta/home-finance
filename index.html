@@ -417,6 +417,16 @@ body {
       <button onclick="changeMonth(1)">▶</button>
     </div>
     <!-- Summary -->
+    <div class="summary-row" style="grid-template-columns:1fr 1fr">
+      <div class="summary-card" style="border-left:3px solid var(--blue)">
+        <div class="label">Opening Balance</div>
+        <div class="value" id="dash-opening">$0</div>
+      </div>
+      <div class="summary-card" style="border-left:3px solid var(--accent)">
+        <div class="label">Closing Balance</div>
+        <div class="value" id="dash-closing">$0</div>
+      </div>
+    </div>
     <div class="summary-row">
       <div class="summary-card">
         <div class="label">Income</div>
@@ -427,7 +437,7 @@ body {
         <div class="value money-out" id="dash-expense">$0</div>
       </div>
       <div class="summary-card">
-        <div class="label">Balance</div>
+        <div class="label">This Month</div>
         <div class="value" id="dash-balance">$0</div>
       </div>
     </div>
@@ -632,7 +642,6 @@ body {
 // CONFIG — Replace this URL after deploying your Apps Script
 // ============================================================
 const API_URL = 'https://script.google.com/macros/s/AKfycbx3_ELhJcqHaTndPWTQRBFc4Y-VWSc74w2DOi2L0quGg5pzx-0f9dg-KrpqlsiQpKJL/exec';
-  
 
 // ============================================================
 // STATE
@@ -819,10 +828,28 @@ function renderDashboard() {
   const balance = totalIn - totalOut;
   const ratio = totalIn > 0 ? Math.round((totalOut / totalIn) * 100) : (totalOut > 0 ? 100 : 0);
 
+  // Calculate opening balance (all income - all expenses BEFORE this month)
+  const mk = monthKey(currentMonth);
+  const prevIncome = allIncome.filter(r => String(r.date).substring(0, 7) < mk).reduce((s, r) => s + Number(r.amount), 0);
+  const prevExpense = allExpenses.filter(r => String(r.date).substring(0, 7) < mk).reduce((s, r) => s + Number(r.amount), 0);
+  const openingBalance = prevIncome - prevExpense;
+  const closingBalance = openingBalance + balance;
+
+  // Opening balance
+  const openEl = document.getElementById('dash-opening');
+  openEl.textContent = fmtMoney(openingBalance);
+  openEl.style.color = openingBalance >= 0 ? 'var(--blue)' : 'var(--red)';
+
+  // Closing balance
+  const closeEl = document.getElementById('dash-closing');
+  closeEl.textContent = fmtMoney(closingBalance);
+  closeEl.style.color = closingBalance >= 0 ? 'var(--green)' : 'var(--red)';
+
+  // This month's figures
   document.getElementById('dash-income').textContent = fmtMoney(totalIn);
   document.getElementById('dash-expense').textContent = fmtMoney(totalOut);
   const balEl = document.getElementById('dash-balance');
-  balEl.textContent = fmtMoney(balance);
+  balEl.textContent = (balance >= 0 ? '+' : '') + fmtMoney(balance);
   balEl.style.color = balance >= 0 ? 'var(--green)' : 'var(--red)';
 
   // Ratio bar
